@@ -1,8 +1,11 @@
 """
 Freeform Calibration + Drawing Mode
 - SPACEBAR: Start/Stop Calibration
-- 'D' key: Enter Drawing Mode (draw with your MOUSE)
+- 'D' key: Enter Drawing Mode
 - 'C' key: Clear the drawing
+- 'S' key: Save drawing to file
+- 'R' key: Replay mode (loops through drawing)
+- Arrow Up/Down: Adjust replay speed
 - CTRL+Q: Quit
 """
 
@@ -12,6 +15,8 @@ import cv2
 import pygame
 import numpy as np
 import mouse
+import json
+from datetime import datetime
 
 pygame.init()
 pygame.font.init()
@@ -21,12 +26,13 @@ screen_width = screen_info.current_w
 screen_height = screen_info.current_h
 
 screen = pygame.display.set_mode((screen_width, screen_height))
-pygame.display.set_caption("EyeGestures - Freeform Calibration + Mouse Drawing")
+pygame.display.set_caption("EyeGestures - Freeform Calibration + Drawing")
 
 font_size = 48
 bold_font = pygame.font.Font(None, font_size)
 bold_font.set_bold(True)
 info_font = pygame.font.Font(None, 24)
+small_font = pygame.font.Font(None, 18)
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(f'{dir_path}/..')
@@ -48,6 +54,8 @@ YELLOW = (255, 255, 0)
 CYAN = (0, 255, 255)
 LIGHT_BLUE = (100, 150, 255)
 PURPLE = (200, 0, 200)
+ORANGE = (255, 165, 0)
+DARK_GREEN = (0, 180, 0)
 
 clock = pygame.time.Clock()
 
@@ -55,15 +63,20 @@ clock = pygame.time.Clock()
 calibration_active = False
 tracking_mode = False
 drawing_mode = False
+replay_mode = False
 gaze_position = [screen_width // 2, screen_height // 2]
 points_collected = 0
 
-# Drawing surface and variables
-drawing_surface = pygame.Surface((screen_width - 420, screen_height))
-drawing_surface.fill(BLACK)
-drawing_points = []  # List of points to draw
+# Drawing variables
+drawing_points = []  # List of line segments: [(p1, p2), ...]
 last_mouse_position = None
-is_drawing = False  # True when mouse button is pressed
+is_drawing = False
+
+# Replay variables
+replay_speed = 30  # milliseconds between points
+replay_index = 0
+replay_timer = 0
+replay_points = []  # Flattened list of all points for replay
 
 running = True
 frame_count = 0
@@ -86,6 +99,41 @@ def get_raw_eye_features(event_data):
         return None
 
 
+def save_drawing(drawing_data):
+    """Save drawing to JSON file"""
+    try:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"drawing_{timestamp}.json"
+
+        with open(filename, 'w') as f:
+            json.dump(drawing_data, f)
+
+        print(f">>> Drawing saved to {filename}")
+        return True
+    except Exception as e:
+        print(f">>> Error saving drawing: {e}")
+        return False
+
+
+def flatten_points(drawing_points):
+    """Convert line segments to flat list of points for replay"""
+    points = []
+    for p1, p2 in drawing_points:
+        # Interpolate between p1 and p2
+        distance = np.sqrt((p2[0] - p1[0]) ** 2 + (p2[1] - p1[1]) ** 2)
+        steps = max(1, int(distance / 2))
+
+        for i in range(steps):
+            t = i / steps
+            x = int(p1[0] + (p2[0] - p1[0]) * t)
+            y = int(p1[1] + (p2[1] - p1[1]) * t)
+            points.append((x, y))
+
+        points.append(p2)
+
+    return points
+
+
 while running:
     frame_count += 1
 
@@ -100,6 +148,7 @@ while running:
                 if drawing_mode:
                     # Exit drawing mode
                     drawing_mode = False
+                    replay_mode = False
                     is_drawing = False
                     print(">>> Exited drawing mode")
                 elif not calibration_active:
@@ -120,31 +169,64 @@ while running:
                         print(">>> CALIBRATION COMPLETE!")
                         print(">>> Press 'D' to enter DRAWING MODE")
 
-            elif event.key == pygame.K_d or event.key == pygame.K_D:
+            elif event.key == pygame.K_d:# or event.key == pygame.K_D:
                 if tracking_mode and freeform_calibrator.is_fitted():
                     drawing_mode = True
+                    replay_mode = False
                     drawing_points.clear()
-                    drawing_surface.fill(BLACK)
                     is_drawing = False
                     last_mouse_position = None
+                    replay_index = 0
                     print("\n>>> DRAWING MODE ACTIVATED")
-                    print(">>> Draw with your MOUSE!")
-                    print(">>> Click and drag to draw")
-                    print(">>> Press SPACEBAR to exit drawing mode")
+                    print(">>> Click and drag to draw on the full screen")
+                    print(">>> Press 'S' to save drawing")
                     print(">>> Press 'C' to clear drawing")
+                    print(">>> Press 'R' to replay drawing")
+                    print(">>> Press SPACEBAR to exit drawing mode")
                 else:
                     print(">>> You must complete calibration first! (Press SPACEBAR)")
 
-            elif event.key == pygame.K_c or event.key == pygame.K_C:
+            elif event.key == pygame.K_c:# or event.key == pygame.K_C:
                 if drawing_mode:
                     drawing_points.clear()
-                    drawing_surface.fill(BLACK)
+                    replay_points.clear()
                     is_drawing = False
                     last_mouse_position = None
+                    replay_index = 0
+                    replay_mode = False
                     print(">>> Drawing cleared!")
 
+            elif event.key == pygame.K_s:# or event.key == pygame.K_S:
+                if drawing_mode and drawing_points:
+                    save_drawing(drawing_points)
+                else:
+                    print(">>> No drawing to save")
+
+            elif event.key == pygame.K_r:# or event.key == pygame.K_R:
+                if drawing_mode and drawing_points:
+                    replay_mode = not replay_mode
+                    if replay_mode:
+                        replay_points = flatten_points(drawing_points)
+                        replay_index = 0
+                        replay_timer = 0
+                        print(f">>> REPLAY MODE ON (Speed: {replay_speed}ms)")
+                    else:
+                        print(">>> Replay mode off")
+                else:
+                    print(">>> No drawing to replay")
+
+            elif event.key == pygame.K_UP:
+                if drawing_mode and replay_mode:
+                    replay_speed = max(10, replay_speed - 10)
+                    print(f">>> Replay speed: {replay_speed}ms")
+
+            elif event.key == pygame.K_DOWN:
+                if drawing_mode and replay_mode:
+                    replay_speed = min(200, replay_speed + 10)
+                    print(f">>> Replay speed: {replay_speed}ms")
+
         elif event.type == pygame.MOUSEBUTTONDOWN:
-            if drawing_mode:
+            if drawing_mode and not replay_mode:
                 is_drawing = True
                 mouse_x, mouse_y = pygame.mouse.get_pos()
                 last_mouse_position = (mouse_x, mouse_y)
@@ -155,14 +237,12 @@ while running:
                 last_mouse_position = None
 
         elif event.type == pygame.MOUSEMOTION:
-            if drawing_mode and is_drawing:
+            if drawing_mode and is_drawing and not replay_mode:
                 mouse_x, mouse_y = pygame.mouse.get_pos()
 
-                # Only draw on the right side of the screen (x >= 420)
-                if mouse_x >= 420:
-                    if last_mouse_position is not None:
-                        drawing_points.append((last_mouse_position, (mouse_x, mouse_y)))
-                    last_mouse_position = (mouse_x, mouse_y)
+                if last_mouse_position is not None:
+                    drawing_points.append((last_mouse_position, (mouse_x, mouse_y)))
+                last_mouse_position = (mouse_x, mouse_y)
 
     ret, frame = cap.read()
     if not ret:
@@ -215,14 +295,15 @@ while running:
     # ==================== RENDERING ====================
     screen.fill(BLACK)
 
-    # Display camera frame
-    if event_data and hasattr(event_data, 'sub_frame') and event_data.sub_frame is not None:
-        try:
-            frame_surface = pygame.surfarray.make_surface(np.rot90(event_data.sub_frame))
-            frame_surface = pygame.transform.scale(frame_surface, (400, 400))
-            screen.blit(frame_surface, (0, 0))
-        except:
-            pass
+    # Display camera frame (only during calibration and tracking)
+    if not drawing_mode:
+        if event_data and hasattr(event_data, 'sub_frame') and event_data.sub_frame is not None:
+            try:
+                frame_surface = pygame.surfarray.make_surface(np.rot90(event_data.sub_frame))
+                frame_surface = pygame.transform.scale(frame_surface, (400, 400))
+                screen.blit(frame_surface, (0, 0))
+            except:
+                pass
 
     # ==================== CALIBRATION MODE UI ====================
     if calibration_active:
@@ -287,31 +368,64 @@ while running:
 
     # ==================== DRAWING MODE UI ====================
     elif drawing_mode:
-        # Draw on the drawing surface
-        drawing_surface.fill(BLACK)
+        # Fill full screen with black for drawing
+        screen.fill(BLACK)
 
         # Draw all line segments
         for line in drawing_points:
             p1, p2 = line
-            pygame.draw.line(drawing_surface, PURPLE, p1, p2, 3)
-            pygame.draw.circle(drawing_surface, LIGHT_BLUE, p1, 3)
-            pygame.draw.circle(drawing_surface, LIGHT_BLUE, p2, 3)
+            pygame.draw.line(screen, PURPLE, p1, p2, 3)
+            pygame.draw.circle(screen, LIGHT_BLUE, p1, 4)
+            pygame.draw.circle(screen, LIGHT_BLUE, p2, 4)
 
-        # Blit drawing surface to screen
-        screen.blit(drawing_surface, (420, 0))
+        # ==================== REPLAY MODE ====================
+        if replay_mode:
+            # Update replay timer
+            replay_timer += clock.get_time()
 
-        # Draw UI text on the left side
-        status_text = "DRAWING MODE - Draw with your MOUSE!"
-        status_surface = bold_font.render(status_text, True, CYAN)
-        screen.blit(status_surface, (10, 420))
+            if replay_timer >= replay_speed:
+                replay_timer = 0
+                replay_index = (replay_index + 1) % len(replay_points)
 
-        points_text = f"Line segments drawn: {len(drawing_points)}"
-        points_surface = info_font.render(points_text, True, GREEN)
-        screen.blit(points_surface, (10, 480))
+            # Draw replay points in different color
+            if replay_points:
+                # Draw all previous points in dim color
+                for i in range(replay_index):
+                    point = replay_points[i]
+                    pygame.draw.circle(screen, DARK_GREEN, point, 2)
 
-        instr_text = "Click and drag to draw | SPACEBAR: Exit | 'C': Clear | CTRL+Q: Quit"
-        instr_surface = info_font.render(instr_text, True, WHITE)
-        screen.blit(instr_surface, (10, 520))
+                # Draw current point in bright color
+                if replay_index < len(replay_points):
+                    current_point = replay_points[replay_index]
+                    pygame.draw.circle(screen, ORANGE, current_point, 8)
+
+            # Draw replay UI
+            replay_text = "REPLAY MODE"
+            replay_surface = bold_font.render(replay_text, True, ORANGE)
+            screen.blit(replay_surface, (20, 20))
+
+            speed_text = f"Speed: {replay_speed}ms (↑/↓ to adjust)"
+            speed_surface = info_font.render(speed_text, True, WHITE)
+            screen.blit(speed_surface, (20, 80))
+
+            progress_text = f"Progress: {replay_index}/{len(replay_points)}"
+            progress_surface = info_font.render(progress_text, True, WHITE)
+            screen.blit(progress_surface, (20, 120))
+
+        else:
+            # Normal drawing mode UI
+            draw_text = "DRAWING MODE - Click and drag to draw"
+            draw_surface = bold_font.render(draw_text, True, CYAN)
+            screen.blit(draw_surface, (20, 20))
+
+            segments_text = f"Line segments: {len(drawing_points)}"
+            segments_surface = info_font.render(segments_text, True, GREEN)
+            screen.blit(segments_surface, (20, 80))
+
+        # Common controls at bottom
+        controls_text = "'S': Save | 'C': Clear | 'R': Replay | SPACEBAR: Exit | CTRL+Q: Quit"
+        controls_surface = small_font.render(controls_text, True, WHITE)
+        screen.blit(controls_surface, (20, screen_height - 40))
 
     # ==================== IDLE MODE UI ====================
     else:
@@ -327,12 +441,12 @@ while running:
         instr2_surface = info_font.render(instr2, True, WHITE)
         screen.blit(instr2_surface, (420, 190))
 
-        instr3 = "After calibration, press 'D' to draw with mouse"
+        instr3 = "After calibration, press 'D' to draw"
         instr3_surface = info_font.render(instr3, True, WHITE)
         screen.blit(instr3_surface, (420, 230))
 
     pygame.display.flip()
-    clock.tick(30)
+    clock.tick(60)
 
 pygame.quit()
 cap.release()
