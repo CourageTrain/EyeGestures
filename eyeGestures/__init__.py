@@ -14,6 +14,8 @@ from eyeGestures.Fixation import Fixation
 from eyeGestures.gazeEstimator import GazeTracker
 from eyeGestures.gevent import Cevent, Gevent
 from eyeGestures.utils import low_pass_filter_fourier, recoverable
+# Add to existing imports in eyeGestures/__init__.py
+from eyeGestures.calibration_freeform import FreeformCalibrator
 
 VERSION = "3.0.0"
 
