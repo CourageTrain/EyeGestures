@@ -72,10 +72,10 @@ drawing_points = []  # List of line segments: [(p1, p2), ...]
 last_mouse_position = None
 is_drawing = False
 
-# Replay variables
-replay_speed = 30  # milliseconds between points
+# Replay variables - FIXED: replay_speed is now frames per point
+replay_speed = 1  # Number of frames to show each point (1 = very fast, 10 = slow)
 replay_index = 0
-replay_timer = 0
+replay_frame_counter = 0
 replay_points = []  # Flattened list of all points for replay
 
 running = True
@@ -208,8 +208,8 @@ while running:
                     if replay_mode:
                         replay_points = flatten_points(drawing_points)
                         replay_index = 0
-                        replay_timer = 0
-                        print(f">>> REPLAY MODE ON (Speed: {replay_speed}ms)")
+                        replay_frame_counter = 0
+                        print(f">>> REPLAY MODE ON (Speed: {replay_speed} frames/point)")
                     else:
                         print(">>> Replay mode off")
                 else:
@@ -217,13 +217,13 @@ while running:
 
             elif event.key == pygame.K_UP:
                 if drawing_mode and replay_mode:
-                    replay_speed = max(10, replay_speed - 10)
-                    print(f">>> Replay speed: {replay_speed}ms")
+                    replay_speed = max(1, replay_speed - 1)
+                    print(f">>> Replay speed: {replay_speed} frames/point (FASTER)")
 
             elif event.key == pygame.K_DOWN:
                 if drawing_mode and replay_mode:
-                    replay_speed = min(200, replay_speed + 10)
-                    print(f">>> Replay speed: {replay_speed}ms")
+                    replay_speed = min(30, replay_speed + 1)
+                    print(f">>> Replay speed: {replay_speed} frames/point (SLOWER)")
 
         elif event.type == pygame.MOUSEBUTTONDOWN:
             if drawing_mode and not replay_mode:
@@ -380,12 +380,13 @@ while running:
 
         # ==================== REPLAY MODE ====================
         if replay_mode:
-            # Update replay timer
-            replay_timer += clock.get_time()
+            # Increment frame counter
+            replay_frame_counter += 1
 
-            if replay_timer >= replay_speed:
-                replay_timer = 0
-                replay_index = (replay_index + 1) % len(replay_points)
+            # Move to next point when enough frames have passed
+            if replay_frame_counter >= replay_speed:
+                replay_frame_counter = 0
+                replay_index = (replay_index + 1) % len(replay_points) if replay_points else 0
 
             # Draw replay points in different color
             if replay_points:
@@ -397,20 +398,24 @@ while running:
                 # Draw current point in bright color
                 if replay_index < len(replay_points):
                     current_point = replay_points[replay_index]
-                    pygame.draw.circle(screen, ORANGE, current_point, 8)
+                    pygame.draw.circle(screen, ORANGE, current_point, 10)
 
             # Draw replay UI
             replay_text = "REPLAY MODE"
             replay_surface = bold_font.render(replay_text, True, ORANGE)
             screen.blit(replay_surface, (20, 20))
 
-            speed_text = f"Speed: {replay_speed}ms (↑/↓ to adjust)"
+            speed_text = f"Speed: {replay_speed} frames/point (1=FAST, 30=SLOW)"
             speed_surface = info_font.render(speed_text, True, WHITE)
             screen.blit(speed_surface, (20, 80))
 
             progress_text = f"Progress: {replay_index}/{len(replay_points)}"
             progress_surface = info_font.render(progress_text, True, WHITE)
             screen.blit(progress_surface, (20, 120))
+
+            speed_hint = "↑ Faster  |  ↓ Slower"
+            speed_hint_surface = info_font.render(speed_hint, True, YELLOW)
+            screen.blit(speed_hint_surface, (20, 160))
 
         else:
             # Normal drawing mode UI
