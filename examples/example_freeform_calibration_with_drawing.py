@@ -1,10 +1,10 @@
 """
-Freeform Calibration + Drawing Mode
+Freeform Calibration + Drawing Mode + Calibration Replay
 - SPACEBAR: Start/Stop Calibration
 - 'D' key: Enter Drawing Mode
 - 'C' key: Clear the drawing
 - 'S' key: Save drawing to file
-- 'R' key: Replay mode (loops through drawing)
+- 'R' key: Replay mode (loops through drawing for calibration)
 - Arrow Up/Down: Adjust replay speed
 - CTRL+Q: Quit
 """
@@ -63,7 +63,7 @@ clock = pygame.time.Clock()
 calibration_active = False
 tracking_mode = False
 drawing_mode = False
-replay_mode = False
+calibration_replay_mode = False  # NEW: replay for calibration
 gaze_position = [screen_width // 2, screen_height // 2]
 points_collected = 0
 
@@ -72,11 +72,12 @@ drawing_points = []  # List of line segments: [(p1, p2), ...]
 last_mouse_position = None
 is_drawing = False
 
-# Replay variables - FIXED: replay_speed is now frames per point
-replay_speed = 1  # Number of frames to show each point (1 = very fast, 10 = slow)
-replay_index = 0
-replay_frame_counter = 0
-replay_points = []  # Flattened list of all points for replay
+# Calibration Replay variables
+calibration_replay_speed = 1  # frames per point
+calibration_replay_index = 0
+calibration_replay_frame_counter = 0
+calibration_replay_points = []  # Flattened list of all points for calibration replay
+calibration_cursor_position = [screen_width // 2, screen_height // 2]
 
 running = True
 frame_count = 0
@@ -148,9 +149,12 @@ while running:
                 if drawing_mode:
                     # Exit drawing mode
                     drawing_mode = False
-                    replay_mode = False
                     is_drawing = False
                     print(">>> Exited drawing mode")
+                elif calibration_replay_mode:
+                    # Stop calibration replay
+                    calibration_replay_mode = False
+                    print(">>> Calibration replay stopped")
                 elif not calibration_active:
                     # Start calibration
                     freeform_calibrator.start_calibration()
@@ -159,6 +163,7 @@ while running:
                     points_collected = 0
                     print("\n>>> CALIBRATION STARTED")
                     print(">>> Follow the yellow cursor with your eyes")
+                    print(">>> OR press 'D' to draw a pattern and use it for calibration")
                 else:
                     # Stop calibration
                     success = freeform_calibrator.stop_calibration()
@@ -167,33 +172,40 @@ while running:
                     if success and freeform_calibrator.is_fitted():
                         tracking_mode = True
                         print(">>> CALIBRATION COMPLETE!")
-                        print(">>> Press 'D' to enter DRAWING MODE")
+                        print(">>> Press 'D' to draw and use for recalibration")
 
             elif event.key == pygame.K_d:# or event.key == pygame.K_D:
-                if tracking_mode and freeform_calibrator.is_fitted():
+                if calibration_active:
+                    # Enter drawing mode during calibration
                     drawing_mode = True
-                    replay_mode = False
                     drawing_points.clear()
                     is_drawing = False
                     last_mouse_position = None
-                    replay_index = 0
-                    print("\n>>> DRAWING MODE ACTIVATED")
-                    print(">>> Click and drag to draw on the full screen")
-                    print(">>> Press 'S' to save drawing")
+                    print("\n>>> DRAWING MODE ACTIVATED (during calibration)")
+                    print(">>> Draw a pattern on the full screen")
+                    print(">>> Press SPACEBAR to exit drawing and use pattern for calibration")
                     print(">>> Press 'C' to clear drawing")
-                    print(">>> Press 'R' to replay drawing")
-                    print(">>> Press SPACEBAR to exit drawing mode")
+                elif tracking_mode and freeform_calibrator.is_fitted():
+                    # Enter drawing mode during tracking (for recalibration)
+                    freeform_calibrator.start_calibration()
+                    calibration_active = True
+                    tracking_mode = False
+                    drawing_mode = True
+                    drawing_points.clear()
+                    is_drawing = False
+                    last_mouse_position = None
+                    points_collected = 0
+                    print("\n>>> RECALIBRATION MODE - DRAWING")
+                    print(">>> Draw a pattern to recalibrate")
+                    print(">>> Press SPACEBAR to use pattern for calibration")
                 else:
-                    print(">>> You must complete calibration first! (Press SPACEBAR)")
+                    print(">>> You must be in calibration or tracking mode to draw")
 
             elif event.key == pygame.K_c:# or event.key == pygame.K_C:
                 if drawing_mode:
                     drawing_points.clear()
-                    replay_points.clear()
                     is_drawing = False
                     last_mouse_position = None
-                    replay_index = 0
-                    replay_mode = False
                     print(">>> Drawing cleared!")
 
             elif event.key == pygame.K_s:# or event.key == pygame.K_S:
@@ -203,30 +215,33 @@ while running:
                     print(">>> No drawing to save")
 
             elif event.key == pygame.K_r:# or event.key == pygame.K_R:
-                if drawing_mode and drawing_points:
-                    replay_mode = not replay_mode
-                    if replay_mode:
-                        replay_points = flatten_points(drawing_points)
-                        replay_index = 0
-                        replay_frame_counter = 0
-                        print(f">>> REPLAY MODE ON (Speed: {replay_speed} frames/point)")
+                if drawing_mode and drawing_points and calibration_active:
+                    # Start calibration replay
+                    calibration_replay_mode = not calibration_replay_mode
+                    if calibration_replay_mode:
+                        calibration_replay_points = flatten_points(drawing_points)
+                        calibration_replay_index = 0
+                        calibration_replay_frame_counter = 0
+                        print(f">>> CALIBRATION REPLAY MODE ON")
+                        print(f">>> Follow the yellow dot with your eyes")
+                        print(f">>> Speed: {calibration_replay_speed} frames/point")
                     else:
-                        print(">>> Replay mode off")
+                        print(">>> Calibration replay stopped")
                 else:
-                    print(">>> No drawing to replay")
+                    print(">>> Must be in drawing mode during calibration to use replay")
 
             elif event.key == pygame.K_UP:
-                if drawing_mode and replay_mode:
-                    replay_speed = max(1, replay_speed - 1)
-                    print(f">>> Replay speed: {replay_speed} frames/point (FASTER)")
+                if calibration_replay_mode:
+                    calibration_replay_speed = max(1, calibration_replay_speed - 1)
+                    print(f">>> Calibration replay speed: {calibration_replay_speed} frames/point (FASTER)")
 
             elif event.key == pygame.K_DOWN:
-                if drawing_mode and replay_mode:
-                    replay_speed = min(30, replay_speed + 1)
-                    print(f">>> Replay speed: {replay_speed} frames/point (SLOWER)")
+                if calibration_replay_mode:
+                    calibration_replay_speed = min(30, calibration_replay_speed + 1)
+                    print(f">>> Calibration replay speed: {calibration_replay_speed} frames/point (SLOWER)")
 
         elif event.type == pygame.MOUSEBUTTONDOWN:
-            if drawing_mode and not replay_mode:
+            if drawing_mode and not calibration_replay_mode:
                 is_drawing = True
                 mouse_x, mouse_y = pygame.mouse.get_pos()
                 last_mouse_position = (mouse_x, mouse_y)
@@ -237,7 +252,7 @@ while running:
                 last_mouse_position = None
 
         elif event.type == pygame.MOUSEMOTION:
-            if drawing_mode and is_drawing and not replay_mode:
+            if drawing_mode and is_drawing and not calibration_replay_mode:
                 mouse_x, mouse_y = pygame.mouse.get_pos()
 
                 if last_mouse_position is not None:
@@ -268,15 +283,20 @@ while running:
     # ==================== CALIBRATION PHASE ====================
     if calibration_active:
         if event_data is not None:
-            mouse_x, mouse_y = mouse.get_position()
             eye_features = get_raw_eye_features(event_data)
 
+            # Use cursor position (either from replay or mouse) as ground truth
+            if calibration_replay_mode:
+                cursor_pos = calibration_cursor_position
+            else:
+                cursor_pos = mouse.get_position()
+
             if eye_features is not None:
-                screen_point = np.array([mouse_x, mouse_y], dtype=np.float64)
+                screen_point = np.array(cursor_pos, dtype=np.float64)
                 freeform_calibrator.add_calibration_point(eye_features, screen_point)
                 points_collected = freeform_calibrator.points_collected
 
-                if points_collected % 100 == 0:
+                if points_collected % 50 == 0:
                     print(f"[Calibration] Points: {points_collected}")
 
     # ==================== TRACKING PHASE (non-drawing) ====================
@@ -295,7 +315,7 @@ while running:
     # ==================== RENDERING ====================
     screen.fill(BLACK)
 
-    # Display camera frame (only during calibration and tracking)
+    # Display camera frame (only during calibration and tracking, not drawing)
     if not drawing_mode:
         if event_data and hasattr(event_data, 'sub_frame') and event_data.sub_frame is not None:
             try:
@@ -306,7 +326,7 @@ while running:
                 pass
 
     # ==================== CALIBRATION MODE UI ====================
-    if calibration_active:
+    if calibration_active and not drawing_mode:
         mouse_x, mouse_y = mouse.get_position()
 
         # Draw cursor circle
@@ -330,7 +350,7 @@ while running:
         pygame.draw.rect(screen, WHITE, (420, 160, bar_width, bar_height), 2)
         pygame.draw.rect(screen, GREEN, (420, 160, int(bar_width * progress), bar_height))
 
-        instr_text = "SPACEBAR: Stop | CTRL+Q: Quit"
+        instr_text = "'D': Draw | SPACEBAR: Stop | CTRL+Q: Quit"
         instr_surface = info_font.render(instr_text, True, WHITE)
         screen.blit(instr_surface, (420, 200))
 
@@ -357,7 +377,7 @@ while running:
         gaze_surface = info_font.render(gaze_text, True, WHITE)
         screen.blit(gaze_surface, (420, 120))
 
-        instr_text = "'D': Draw | SPACEBAR: Recalibrate | CTRL+Q: Quit"
+        instr_text = "'D': Recalibrate | SPACEBAR: Restart | CTRL+Q: Quit"
         instr_surface = info_font.render(instr_text, True, WHITE)
         screen.blit(instr_surface, (420, 160))
 
@@ -371,55 +391,53 @@ while running:
         # Fill full screen with black for drawing
         screen.fill(BLACK)
 
-        # Draw all line segments
+        # Draw all line segments (the pattern user drew)
         for line in drawing_points:
             p1, p2 = line
             pygame.draw.line(screen, PURPLE, p1, p2, 3)
             pygame.draw.circle(screen, LIGHT_BLUE, p1, 4)
             pygame.draw.circle(screen, LIGHT_BLUE, p2, 4)
 
-        # ==================== REPLAY MODE ====================
-        if replay_mode:
+        # ==================== CALIBRATION REPLAY MODE ====================
+        if calibration_replay_mode:
             # Increment frame counter
-            replay_frame_counter += 1
+            calibration_replay_frame_counter += 1
 
             # Move to next point when enough frames have passed
-            if replay_frame_counter >= replay_speed:
-                replay_frame_counter = 0
-                replay_index = (replay_index + 1) % len(replay_points) if replay_points else 0
+            if calibration_replay_frame_counter >= calibration_replay_speed:
+                calibration_replay_frame_counter = 0
+                calibration_replay_index = (calibration_replay_index + 1) % len(
+                    calibration_replay_points) if calibration_replay_points else 0
 
-            # Draw replay points in different color
-            if replay_points:
-                # Draw all previous points in dim color
-                for i in range(replay_index):
-                    point = replay_points[i]
-                    pygame.draw.circle(screen, DARK_GREEN, point, 2)
+            # Update cursor position
+            if calibration_replay_points and calibration_replay_index < len(calibration_replay_points):
+                calibration_cursor_position = list(calibration_replay_points[calibration_replay_index])
 
-                # Draw current point in bright color
-                if replay_index < len(replay_points):
-                    current_point = replay_points[replay_index]
-                    pygame.draw.circle(screen, ORANGE, current_point, 10)
+            # Draw the yellow calibration cursor
+            pygame.draw.circle(screen, YELLOW, calibration_cursor_position, 30, 3)
+            pygame.draw.circle(screen, YELLOW, calibration_cursor_position, 15)
+            pygame.draw.circle(screen, YELLOW, calibration_cursor_position, 8, 2)
 
             # Draw replay UI
-            replay_text = "REPLAY MODE"
+            replay_text = "CALIBRATION REPLAY - Follow the yellow dot with your eyes"
             replay_surface = bold_font.render(replay_text, True, ORANGE)
             screen.blit(replay_surface, (20, 20))
 
-            speed_text = f"Speed: {replay_speed} frames/point (1=FAST, 30=SLOW)"
+            speed_text = f"Speed: {calibration_replay_speed} frames/point (1=FAST, 30=SLOW)"
             speed_surface = info_font.render(speed_text, True, WHITE)
             screen.blit(speed_surface, (20, 80))
 
-            progress_text = f"Progress: {replay_index}/{len(replay_points)}"
+            progress_text = f"Progress: {calibration_replay_index}/{len(calibration_replay_points)} | Points collected: {points_collected}"
             progress_surface = info_font.render(progress_text, True, WHITE)
             screen.blit(progress_surface, (20, 120))
 
-            speed_hint = "↑ Faster  |  ↓ Slower"
+            speed_hint = "↑ Faster  |  ↓ Slower  |  SPACEBAR: Stop replay"
             speed_hint_surface = info_font.render(speed_hint, True, YELLOW)
             screen.blit(speed_hint_surface, (20, 160))
 
         else:
             # Normal drawing mode UI
-            draw_text = "DRAWING MODE - Click and drag to draw"
+            draw_text = "DRAWING MODE - Click and drag to draw your calibration pattern"
             draw_surface = bold_font.render(draw_text, True, CYAN)
             screen.blit(draw_surface, (20, 20))
 
@@ -427,10 +445,9 @@ while running:
             segments_surface = info_font.render(segments_text, True, GREEN)
             screen.blit(segments_surface, (20, 80))
 
-        # Common controls at bottom
-        controls_text = "'S': Save | 'C': Clear | 'R': Replay | SPACEBAR: Exit | CTRL+Q: Quit"
-        controls_surface = small_font.render(controls_text, True, WHITE)
-        screen.blit(controls_surface, (20, screen_height - 40))
+            instr_text = "'R': Use pattern for calibration | 'S': Save | 'C': Clear | SPACEBAR: Exit"
+            instr_surface = info_font.render(instr_text, True, WHITE)
+            screen.blit(instr_surface, (20, screen_height - 40))
 
     # ==================== IDLE MODE UI ====================
     else:
@@ -446,7 +463,7 @@ while running:
         instr2_surface = info_font.render(instr2, True, WHITE)
         screen.blit(instr2_surface, (420, 190))
 
-        instr3 = "After calibration, press 'D' to draw"
+        instr3 = "OR press 'D' during calibration to draw a pattern"
         instr3_surface = info_font.render(instr3, True, WHITE)
         screen.blit(instr3_surface, (420, 230))
 
