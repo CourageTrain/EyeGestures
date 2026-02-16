@@ -1,7 +1,7 @@
 """
 Freeform Calibration + Drawing Mode
 - SPACEBAR: Start/Stop Calibration
-- 'D' key: Enter Drawing Mode (draw with your eyes)
+- 'D' key: Enter Drawing Mode (draw with your MOUSE)
 - 'C' key: Clear the drawing
 - CTRL+Q: Quit
 """
@@ -21,7 +21,7 @@ screen_width = screen_info.current_w
 screen_height = screen_info.current_h
 
 screen = pygame.display.set_mode((screen_width, screen_height))
-pygame.display.set_caption("EyeGestures - Freeform Calibration + Drawing")
+pygame.display.set_caption("EyeGestures - Freeform Calibration + Mouse Drawing")
 
 font_size = 48
 bold_font = pygame.font.Font(None, font_size)
@@ -58,11 +58,12 @@ drawing_mode = False
 gaze_position = [screen_width // 2, screen_height // 2]
 points_collected = 0
 
-# Drawing surface
+# Drawing surface and variables
 drawing_surface = pygame.Surface((screen_width - 420, screen_height))
 drawing_surface.fill(BLACK)
 drawing_points = []  # List of points to draw
-last_gaze_position = gaze_position.copy()
+last_mouse_position = None
+is_drawing = False  # True when mouse button is pressed
 
 running = True
 frame_count = 0
@@ -99,6 +100,7 @@ while running:
                 if drawing_mode:
                     # Exit drawing mode
                     drawing_mode = False
+                    is_drawing = False
                     print(">>> Exited drawing mode")
                 elif not calibration_active:
                     # Start calibration
@@ -118,13 +120,16 @@ while running:
                         print(">>> CALIBRATION COMPLETE!")
                         print(">>> Press 'D' to enter DRAWING MODE")
 
-            elif event.key == pygame.K_d:
+            elif event.key == pygame.K_d or event.key == pygame.K_D:
                 if tracking_mode and freeform_calibrator.is_fitted():
                     drawing_mode = True
                     drawing_points.clear()
                     drawing_surface.fill(BLACK)
+                    is_drawing = False
+                    last_mouse_position = None
                     print("\n>>> DRAWING MODE ACTIVATED")
-                    print(">>> Draw with your eyes!")
+                    print(">>> Draw with your MOUSE!")
+                    print(">>> Click and drag to draw")
                     print(">>> Press SPACEBAR to exit drawing mode")
                     print(">>> Press 'C' to clear drawing")
                 else:
@@ -134,7 +139,30 @@ while running:
                 if drawing_mode:
                     drawing_points.clear()
                     drawing_surface.fill(BLACK)
+                    is_drawing = False
+                    last_mouse_position = None
                     print(">>> Drawing cleared!")
+
+        elif event.type == pygame.MOUSEBUTTONDOWN:
+            if drawing_mode:
+                is_drawing = True
+                mouse_x, mouse_y = pygame.mouse.get_pos()
+                last_mouse_position = (mouse_x, mouse_y)
+
+        elif event.type == pygame.MOUSEBUTTONUP:
+            if drawing_mode:
+                is_drawing = False
+                last_mouse_position = None
+
+        elif event.type == pygame.MOUSEMOTION:
+            if drawing_mode and is_drawing:
+                mouse_x, mouse_y = pygame.mouse.get_pos()
+
+                # Only draw on the right side of the screen (x >= 420)
+                if mouse_x >= 420:
+                    if last_mouse_position is not None:
+                        drawing_points.append((last_mouse_position, (mouse_x, mouse_y)))
+                    last_mouse_position = (mouse_x, mouse_y)
 
     ret, frame = cap.read()
     if not ret:
@@ -183,27 +211,6 @@ while running:
                     gaze_x = max(0, min(int(predicted_gaze[0]), screen_width - 1))
                     gaze_y = max(0, min(int(predicted_gaze[1]), screen_height - 1))
                     gaze_position = [gaze_x, gaze_y]
-
-    # ==================== DRAWING PHASE ====================
-    elif drawing_mode and tracking_mode and freeform_calibrator.is_fitted():
-        if event_data is not None:
-            eye_features = get_raw_eye_features(event_data)
-
-            if eye_features is not None:
-                predicted_gaze = freeform_calibrator.predict(eye_features)
-
-                if predicted_gaze is not None:
-                    gaze_x = max(0, min(int(predicted_gaze[0]), screen_width - 1))
-                    gaze_y = max(0, min(int(predicted_gaze[1]), screen_height - 1))
-                    gaze_position = [gaze_x, gaze_y]
-
-                    # Add point to drawing if it moved significantly
-                    distance = np.sqrt((gaze_position[0] - last_gaze_position[0]) ** 2 +
-                                       (gaze_position[1] - last_gaze_position[1]) ** 2)
-
-                    if distance > 3:  # Only draw if moved more than 3 pixels
-                        drawing_points.append(tuple(gaze_position))
-                        last_gaze_position = gaze_position.copy()
 
     # ==================== RENDERING ====================
     screen.fill(BLACK)
@@ -269,9 +276,7 @@ while running:
         gaze_surface = info_font.render(gaze_text, True, WHITE)
         screen.blit(gaze_surface, (420, 120))
 
-        instr_text = "'D': Draw | 'R': Resume Cal | CTRL+Q: Quit"
-        instr_surface = info_font.render(instr_text, True, WHITE)
-        screen.blit(instr_text, (420, 160))
+        instr_text = "'D': Draw | SPACEBAR: Recalibrate | CTRL+Q: Quit"
         instr_surface = info_font.render(instr_text, True, WHITE)
         screen.blit(instr_surface, (420, 160))
 
@@ -285,51 +290,26 @@ while running:
         # Draw on the drawing surface
         drawing_surface.fill(BLACK)
 
-        # Draw all points
-        if len(drawing_points) > 0:
-            for i, point in enumerate(drawing_points):
-                # Adjust point to drawing surface coordinates (offset by 420)
-                surf_x = point[0] - 420
-                surf_y = point[1]
-
-                if 0 <= surf_x < drawing_surface.get_width() and 0 <= surf_y < drawing_surface.get_height():
-                    pygame.draw.circle(drawing_surface, LIGHT_BLUE, (surf_x, surf_y), 5)
-
-            # Draw lines between consecutive points
-            for i in range(1, len(drawing_points)):
-                p1 = drawing_points[i - 1]
-                p2 = drawing_points[i]
-
-                # Adjust to surface coordinates
-                surf_x1 = p1[0] - 420
-                surf_y1 = p1[1]
-                surf_x2 = p2[0] - 420
-                surf_y2 = p2[1]
-
-                if (0 <= surf_x1 < drawing_surface.get_width() and 0 <= surf_y1 < drawing_surface.get_height() and
-                        0 <= surf_x2 < drawing_surface.get_width() and 0 <= surf_y2 < drawing_surface.get_height()):
-                    pygame.draw.line(drawing_surface, PURPLE, (surf_x1, surf_y1), (surf_x2, surf_y2), 3)
-
-        # Draw current gaze position
-        gaze_x = gaze_position[0] - 420
-        gaze_y = gaze_position[1]
-        if 0 <= gaze_x < drawing_surface.get_width() and 0 <= gaze_y < drawing_surface.get_height():
-            pygame.draw.circle(drawing_surface, RED, (gaze_x, gaze_y), 15)
-            pygame.draw.circle(drawing_surface, WHITE, (gaze_x, gaze_y), 15, 2)
+        # Draw all line segments
+        for line in drawing_points:
+            p1, p2 = line
+            pygame.draw.line(drawing_surface, PURPLE, p1, p2, 3)
+            pygame.draw.circle(drawing_surface, LIGHT_BLUE, p1, 3)
+            pygame.draw.circle(drawing_surface, LIGHT_BLUE, p2, 3)
 
         # Blit drawing surface to screen
         screen.blit(drawing_surface, (420, 0))
 
-        # Draw UI text
-        status_text = "DRAWING MODE - Draw with your eyes!"
+        # Draw UI text on the left side
+        status_text = "DRAWING MODE - Draw with your MOUSE!"
         status_surface = bold_font.render(status_text, True, CYAN)
         screen.blit(status_surface, (10, 420))
 
-        points_text = f"Points drawn: {len(drawing_points)}"
+        points_text = f"Line segments drawn: {len(drawing_points)}"
         points_surface = info_font.render(points_text, True, GREEN)
         screen.blit(points_surface, (10, 480))
 
-        instr_text = "SPACEBAR: Exit | 'C': Clear | CTRL+Q: Quit"
+        instr_text = "Click and drag to draw | SPACEBAR: Exit | 'C': Clear | CTRL+Q: Quit"
         instr_surface = info_font.render(instr_text, True, WHITE)
         screen.blit(instr_surface, (10, 520))
 
@@ -347,7 +327,7 @@ while running:
         instr2_surface = info_font.render(instr2, True, WHITE)
         screen.blit(instr2_surface, (420, 190))
 
-        instr3 = "After calibration, press 'D' to draw"
+        instr3 = "After calibration, press 'D' to draw with mouse"
         instr3_surface = info_font.render(instr3, True, WHITE)
         screen.blit(instr3_surface, (420, 230))
 
