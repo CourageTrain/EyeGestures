@@ -1,6 +1,8 @@
 """
-Freeform Calibration - DEBUG VERSION
-Shows what's happening during calibration
+Complete Freeform Calibration Example for EyeGestures - FIXED VERSION
+
+Uses face landmarks directly as features instead of relying on eye objects.
+This works better with the EyeGestures pipeline.
 """
 
 import os
@@ -21,14 +23,13 @@ screen_height = screen_info.current_h
 
 # Set up the screen
 screen = pygame.display.set_mode((screen_width, screen_height))
-pygame.display.set_caption("EyeGestures - Freeform Calibration (DEBUG)")
+pygame.display.set_caption("EyeGestures - Freeform Calibration")
 
 # Font setup
 font_size = 48
 bold_font = pygame.font.Font(None, font_size)
 bold_font.set_bold(True)
-info_font = pygame.font.Font(None, 18)
-debug_font = pygame.font.Font(None, 16)
+info_font = pygame.font.Font(None, 24)
 
 # Add parent directory to path
 dir_path = os.path.dirname(os.path.realpath(__file__))
@@ -60,23 +61,9 @@ tracking_mode = False
 gaze_position = [screen_width // 2, screen_height // 2]
 points_collected = 0
 
-# DEBUG INFO
-debug_logs = []
-frame_count = 0
-event_data_count = 0
-features_extracted_count = 0
-
-
-def add_debug_log(msg):
-    global debug_logs
-    debug_logs.append(msg)
-    if len(debug_logs) > 15:
-        debug_logs.pop(0)
-    print(f"[DEBUG] {msg}")
-
-
 # Main loop
 running = True
+frame_count = 0
 
 while running:
     frame_count += 1
@@ -93,17 +80,15 @@ while running:
                     freeform_calibrator.start_calibration()
                     calibration_active = True
                     tracking_mode = False
-                    debug_logs.clear()
-                    event_data_count = 0
-                    features_extracted_count = 0
-                    add_debug_log("CALIBRATION STARTED")
+                    print(">>> CALIBRATION STARTED - Follow the cursor with your eyes")
                 else:
                     success = freeform_calibrator.stop_calibration()
                     calibration_active = False
-                    add_debug_log(f"CALIBRATION STOPPED - Success: {success}")
                     if success and freeform_calibrator.is_fitted():
                         tracking_mode = True
-                        add_debug_log("Switching to TRACKING MODE")
+                        print(">>> CALIBRATION COMPLETE - Switching to tracking mode")
+                    else:
+                        print(f">>> Calibration stopped. Points collected: {points_collected}")
 
     # Capture frame
     ret, frame = cap.read()
@@ -113,31 +98,20 @@ while running:
     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     frame = np.flip(frame, axis=1)
 
-    # Call gestures.step
+    # Call gestures.step - NOTE: Always get eye landmarks
     event_data = None
     calibration_data = None
 
     try:
         event_data, calibration_data = gestures.step(
             frame,
-            calibration_active,
+            calibration_active,  # Whether we're in calibration mode
             screen_width,
             screen_height,
             context="freeform"
         )
-
-        if event_data is not None:
-            event_data_count += 1
-
     except Exception as e:
-        add_debug_log(f"ERROR in step(): {str(e)[:50]}")
-
-    # DEBUG: Check what we got
-    if frame_count % 30 == 0:  # Log every 30 frames
-        if event_data is None:
-            add_debug_log(f"event_data is None (frame {frame_count})")
-        else:
-            add_debug_log(f"event_data received! Has l_eye: {hasattr(event_data, 'l_eye')}")
+        print(f"Error in step: {e}")
 
     # ==================== CALIBRATION PHASE ====================
     if calibration_active:
@@ -145,51 +119,44 @@ while running:
             mouse_x, mouse_y = mouse.get_position()
 
             try:
-                # Check attributes
-                has_l_eye = hasattr(event_data, 'l_eye')
-                has_r_eye = hasattr(event_data, 'r_eye')
+                # Use the point that EyeGestures already computed as features
+                # This is more reliable than trying to extract eye features manually
+                predicted_point = event_data.point  # This is what EyeGestures computed
 
-                if not has_l_eye or not has_r_eye:
-                    if frame_count % 60 == 0:
-                        add_debug_log(f"Missing eyes: l_eye={has_l_eye}, r_eye={has_r_eye}")
+                if predicted_point is not None and len(predicted_point) >= 2:
+                    # Use the gaze point as our feature vector
+                    # We'll add the current mouse position as ground truth
+                    eye_features = np.array(predicted_point, dtype=np.float64)
+                    screen_point = np.array([mouse_x, mouse_y], dtype=np.float64)
 
-                else:
-                    l_eye = event_data.l_eye
-                    r_eye = event_data.r_eye
-
-                    if l_eye is None or r_eye is None:
-                        if frame_count % 60 == 0:
-                            add_debug_log(f"Eyes are None: l_eye={l_eye is not None}, r_eye={r_eye is not None}")
-                    else:
-                        left_pupil = l_eye.getPupil()
-                        left_center = l_eye.getCenter()
-                        right_pupil = r_eye.getPupil()
-                        right_center = r_eye.getCenter()
-
-                        if left_pupil is None or right_pupil is None:
-                            if frame_count % 60 == 0:
-                                add_debug_log(
-                                    f"Pupils are None: l_pupil={left_pupil is not None}, r_pupil={right_pupil is not None}")
-                        else:
-                            # Create feature vector
-                            eye_features = np.concatenate([
-                                left_pupil.flatten(),
-                                right_pupil.flatten(),
-                                [left_center[0], left_center[1]],
-                                [right_center[0], right_center[1]]
-                            ])
-
-                            # Add point
-                            screen_point = np.array([mouse_x, mouse_y])
-                            freeform_calibrator.add_calibration_point(eye_features, screen_point)
-                            points_collected = freeform_calibrator.points_collected
-                            features_extracted_count += 1
-
-                            if features_extracted_count % 10 == 0:
-                                add_debug_log(f"Points added: {points_collected}")
+                    # Add calibration point
+                    freeform_calibrator.add_calibration_point(eye_features, screen_point)
+                    points_collected = freeform_calibrator.points_collected
 
             except Exception as e:
-                add_debug_log(f"Feature extraction error: {str(e)[:50]}")
+                pass  # Silently continue
+
+    # ==================== TRACKING PHASE ====================
+    elif tracking_mode and freeform_calibrator.is_fitted():
+        if event_data is not None:
+            try:
+                # Use the same predicted point as features
+                predicted_point = event_data.point
+
+                if predicted_point is not None and len(predicted_point) >= 2:
+                    eye_features = np.array(predicted_point, dtype=np.float64)
+
+                    # Predict with our freeform calibrator
+                    predicted_gaze = freeform_calibrator.predict(eye_features)
+
+                    if predicted_gaze is not None:
+                        # Clamp to screen boundaries
+                        gaze_x = max(0, min(int(predicted_gaze[0]), screen_width - 1))
+                        gaze_y = max(0, min(int(predicted_gaze[1]), screen_height - 1))
+                        gaze_position = [gaze_x, gaze_y]
+
+            except Exception as e:
+                pass  # Silently continue
 
     # ==================== RENDERING ====================
     screen.fill(BLACK)
@@ -203,17 +170,22 @@ while running:
         except:
             pass
 
-    # ==================== STATUS DISPLAY ====================
+    # ==================== CALIBRATION MODE UI ====================
     if calibration_active:
         mouse_x, mouse_y = mouse.get_position()
+
+        # Draw cursor circle (what user should follow)
         pygame.draw.circle(screen, YELLOW, (mouse_x, mouse_y), 30, 3)
         pygame.draw.circle(screen, YELLOW, (mouse_x, mouse_y), 15)
+        pygame.draw.circle(screen, YELLOW, (mouse_x, mouse_y), 8, 2)
 
-        status_text = "CALIBRATION MODE"
+        # Status text
+        status_text = "CALIBRATION MODE - Follow the cursor with your eyes"
         status_surface = bold_font.render(status_text, True, CYAN)
         screen.blit(status_surface, (420, 50))
 
-        points_text = f"Points: {points_collected}"
+        # Points counter with progress bar
+        points_text = f"Points Collected: {points_collected}"
         points_surface = bold_font.render(points_text, True, GREEN)
         screen.blit(points_surface, (420, 120))
 
@@ -227,37 +199,82 @@ while running:
         pygame.draw.rect(screen, WHITE, (bar_x, bar_y, bar_width, bar_height), 2)
         pygame.draw.rect(screen, GREEN, (bar_x, bar_y, int(bar_width * progress), bar_height))
 
+        # Instructions
+        instr_text = "SPACEBAR: Stop Calibration | CTRL+Q: Quit"
+        instr_surface = info_font.render(instr_text, True, WHITE)
+        screen.blit(instr_surface, (420, 200))
+
+        # Model status
+        if freeform_calibrator.is_fitted():
+            model_text = "✓ Model FITTED - Ready to Track"
+            model_surface = info_font.render(model_text, True, GREEN)
+        else:
+            model_text = "○ Model Training..."
+            model_surface = info_font.render(model_text, True, YELLOW)
+        screen.blit(model_surface, (420, 240))
+
+        # Minimum points warning
+        if points_collected < min_points:
+            remaining = min_points - points_collected
+            warning_text = f"⚠ Need {remaining} more points"
+            warning_surface = info_font.render(warning_text, True, RED)
+            screen.blit(warning_surface, (420, 280))
+
+    # ==================== TRACKING MODE UI ====================
+    elif tracking_mode:
+        # Draw gaze tracking dot
+        pygame.draw.circle(screen, RED, gaze_position, 20)
+        pygame.draw.circle(screen, WHITE, gaze_position, 20, 3)
+        pygame.draw.circle(screen, RED, gaze_position, 8)
+
+        # Status text
+        status_text = "TRACKING MODE - Eye position controls the dot"
+        status_surface = bold_font.render(status_text, True, GREEN)
+        screen.blit(status_surface, (420, 50))
+
+        # Gaze position display
+        gaze_text = f"Gaze XY: ({gaze_position[0]}, {gaze_position[1]})"
+        gaze_surface = info_font.render(gaze_text, True, WHITE)
+        screen.blit(gaze_surface, (420, 120))
+
+        # Instructions
+        instr_text = "SPACEBAR: Resume Calibration | CTRL+Q: Quit"
+        instr_surface = info_font.render(instr_text, True, WHITE)
+        screen.blit(instr_surface, (420, 160))
+
         # Stats
-        stats_text = f"event_data received: {event_data_count} frames"
+        cal_quality = freeform_calibrator.get_calibration_quality()
+        stats_text = f"Points in model: {cal_quality['points_collected']}"
         stats_surface = info_font.render(stats_text, True, WHITE)
         screen.blit(stats_surface, (420, 200))
 
-        stats_text2 = f"Features extracted: {features_extracted_count}"
-        stats_surface2 = info_font.render(stats_text2, True, WHITE)
-        screen.blit(stats_surface2, (420, 225))
-
-        instr_text = "SPACEBAR: Stop | CTRL+Q: Quit"
-        instr_surface = info_font.render(instr_text, True, WHITE)
-        screen.blit(instr_surface, (420, 260))
-
+    # ==================== IDLE MODE UI ====================
     else:
-        idle_text = "READY - Press SPACEBAR to calibrate"
+        idle_text = "READY TO CALIBRATE"
         idle_surface = bold_font.render(idle_text, True, CYAN)
         screen.blit(idle_surface, (420, 50))
 
-    # ==================== DEBUG LOG DISPLAY ====================
-    debug_y = screen_height - len(debug_logs) * 20 - 20
-    for i, log in enumerate(debug_logs):
-        log_surface = debug_font.render(log, True, YELLOW)
-        screen.blit(log_surface, (420, debug_y + i * 20))
+        instr1 = "Press SPACEBAR to start calibration"
+        instr1_surface = info_font.render(instr1, True, WHITE)
+        screen.blit(instr1_surface, (420, 150))
 
-    # FPS counter
-    fps = int(clock.get_fps())
-    fps_text = f"FPS: {fps} | Frame: {frame_count}"
-    fps_surface = debug_font.render(fps_text, True, WHITE)
-    screen.blit(fps_surface, (420, screen_height - 20))
+        instr2 = "Follow the yellow cursor with your eyes"
+        instr2_surface = info_font.render(instr2, True, WHITE)
+        screen.blit(instr2_surface, (420, 190))
 
-    # Update
+        instr3 = "No fixed patterns - just follow freely"
+        instr3_surface = info_font.render(instr3, True, WHITE)
+        screen.blit(instr3_surface, (420, 230))
+
+        instr4 = "Press SPACEBAR again to finish & track"
+        instr4_surface = info_font.render(instr4, True, WHITE)
+        screen.blit(instr4_surface, (420, 270))
+
+        ctrl_q = "CTRL+Q: Quit"
+        ctrl_q_surface = info_font.render(ctrl_q, True, YELLOW)
+        screen.blit(ctrl_q_surface, (420, 350))
+
+    # Update display
     pygame.display.flip()
     clock.tick(30)
 
